@@ -1106,12 +1106,28 @@ function initKeys(){
       const base="c"+hashStr(c.question||"");
       seen[base]=(seen[base]||0)+1;
       c._k=seen[base]>1?base+"-"+seen[base]:base;
+      if(c._os===undefined) c._os=c.section;   // 원래 진도 (되돌리기용)
     }
     (c.slides||[]).forEach((s,i)=>{s._k=c._k+"#"+i; if(s._orig===undefined) s._orig=s.text; s.edited=false;});
   });
 }
 function slideText(s){return (s.edited||s._esc)?esc(s.text):s.text;}
+// 기존(원본) 판례의 상단 제목·진도 수정본은 "m:"+판례키 로 저장됩니다.
+function caseMetaKey(c){return "m:"+c._k;}
+function applyCaseMeta(){
+  CASES.forEach(c=>{
+    if(c._added) return;
+    const m=EDITS[caseMetaKey(c)];
+    if(m&&m.kind==="casemeta"){
+      if(typeof m.title==="string"&&m.title.trim()) c._title=m.title.trim(); else delete c._title;
+      c.section=(typeof m.section==="string"&&m.section.trim())?m.section.trim():c._os;
+    }else{
+      delete c._title; c.section=c._os;
+    }
+  });
+}
 function applyEdits(){
+  applyCaseMeta();
   CASES.forEach(c=>(c.slides||[]).forEach(s=>{
     const e=EDITS[s._k];
     if(e&&typeof e.text==="string"&&e.text.trim()){s.text=e.text;s.edited=true;}
@@ -1269,12 +1285,44 @@ function openEdit(){
   editUnits=units;editCase=c;
   const box=$("editFields");
   box.innerHTML="";
-  if(c._added){
+  {
     const g=document.createElement("div");g.className="field";
-    g.innerHTML='<div class="field-head"><span>판례 제목</span></div><input id="editTitle" autocomplete="off">'+
-      '<div class="field-head" style="margin-top:12px"><span>진도</span></div><input id="editSection" autocomplete="off">';
+    g.innerHTML='<div class="field-head"><span>상단 제목 (판례 제목)</span></div><input id="editTitle" autocomplete="off">'+
+      '<div class="field-head" id="editSecHead" style="margin-top:12px"><span>진도 (다른 진도로 옮기기)</span></div><select id="editSection"></select>'+
+      '<input id="editNewSection" style="display:none;margin-top:8px" placeholder="새 진도 이름" autocomplete="off">'+
+      '<div id="editRenameBox" style="display:none;margin-top:10px"><div class="note" style="margin:0 0 5px">이 판례가 속한 진도의 이름이 바뀝니다. 그 진도에 들어 있는 판례는 모두 그대로 함께 유지됩니다.</div><input id="editRenameSection" autocomplete="off" placeholder="새 진도 이름"></div>';
     box.appendChild(g);
-    $("editTitle").value=c._title||"";$("editSection").value=c.section||"";
+    const secs=sectionNames();
+    if(c.section&&secs.indexOf(c.section)<0) secs.push(c.section);
+    if(!c._added&&c._os&&secs.indexOf(c._os)<0) secs.push(c._os);
+    const sel=$("editSection");
+    secs.forEach(n=>{const o=document.createElement("option");o.value=n;o.textContent=n;sel.appendChild(o);});
+    const no=document.createElement("option");no.value="__new__";no.textContent="＋ 새 진도 만들기";sel.appendChild(no);
+    sel.value=c.section;
+    sel.onchange=()=>{
+      const isNew=sel.value==="__new__";
+      $("editNewSection").style.display=isNew?"block":"none";
+      if(isNew) $("editNewSection").focus();
+    };
+    $("editTitle").value=caseTitle(c);
+    const rb=document.createElement("button");
+    rb.type="button";rb.className="linkbtn";rb.style.color="#087df5";rb.textContent="이 진도 이름 바꾸기";
+    rb.onclick=()=>{
+      const box=$("editRenameBox"), open=box.style.display==="none";
+      box.style.display=open?"block":"none";
+      rb.textContent=open?"이름 바꾸기 취소":"이 진도 이름 바꾸기";
+      if(open){$("editRenameSection").value=c.section;$("editRenameSection").focus();$("editRenameSection").select();}
+    };
+    $("editSecHead").appendChild(rb);
+    if(!c._added&&EDITS[caseMetaKey(c)]){
+      const b=document.createElement("button");
+      b.type="button";b.className="linkbtn";b.textContent="원래 제목·진도로 되돌리기";
+      b.onclick=()=>{
+        $("editTitle").value=titleOf(c.question);
+        sel.value=c._os;sel.onchange();
+      };
+      g.querySelector(".field-head").appendChild(b);
+    }
   }
   $("editDelete").style.display=c._added?"":"none";
   units.forEach(s=>{
@@ -1298,11 +1346,64 @@ function openEdit(){
   $("editBg").classList.add("open");
   const first=box.querySelector("textarea"); if(first){first.focus();first.setSelectionRange(0,0);first.scrollTop=0;}
 }
+function editRenameValue(){   // 진도 이름 바꾸기 칸이 열려 있으면 그 값, 아니면 null
+  const box=$("editRenameBox");
+  return (box&&box.style.display!=="none")?$("editRenameSection").value.trim():null;
+}
+function editSectionValue(){
+  const sel=$("editSection");
+  if(!sel) return "";
+  return sel.value==="__new__"?$("editNewSection").value.trim():sel.value;
+}
 function editDirty(){
-  const meta=!!(editCase&&editCase._added&&$("editTitle")&&
-    ($("editTitle").value.trim()!==editCase._title||$("editSection").value.trim()!==editCase.section));
+  const meta=!!(editCase&&$("editTitle")&&
+    ($("editTitle").value.trim()!==caseTitle(editCase)||editSectionValue()!==editCase.section||
+     (editRenameValue()!==null&&editRenameValue()!==editCase.section)));
   return meta||[...$("editFields").querySelectorAll("textarea")].some((t,i)=>
     t.value.replace(/\r\n?/g,"\n")!==editUnits[i].text);
+}
+// 진도 이름을 바꿈: 그 진도에 속한 판례 전체가 새 이름 아래에 그대로 유지됨
+function renameSectionEverywhere(oldN,newN){
+  CASES.forEach(c=>{
+    if(c.section!==oldN) return;
+    if(c._added){
+      const en=EDITS[c._id];
+      if(en){en.section=newN;PENDING[c._id]=en;}
+    }else{
+      const mk=caseMetaKey(c), dt=titleOf(c.question), old=EDITS[mk];
+      const e={kind:"casemeta",ref:dt,at:new Date().toISOString()};
+      if(old&&typeof old.title==="string"&&old.title.trim()) e.title=old.title.trim();
+      if(newN!==c._os) e.section=newN;
+      if(!e.title&&!e.section){delete EDITS[mk];PENDING[mk]=null;}
+      else{EDITS[mk]=e;PENDING[mk]=e;}
+    }
+  });
+  const meta=getOrderMeta();   // 진도 순서 기억도 새 이름으로 바꿈
+  let so=(Array.isArray(meta.sectionOrder)&&meta.sectionOrder.length)?meta.sectionOrder.slice():sectionNames();
+  so=so.map(n=>n===oldN?newN:n).filter((n,i,a)=>a.indexOf(n)===i);
+  meta.kind="meta";meta.app=APP_ID;
+  if(!Array.isArray(meta.order)) meta.order=[];
+  meta.sectionOrder=so;
+  EDITS[META_KEY]=meta;PENDING[META_KEY]=meta;
+}
+function moveCaseToSectionEnd(k){
+  const i=CASES.findIndex(c=>c._k===k);
+  if(i<0) return;
+  const c=CASES.splice(i,1)[0];
+  let at=-1;
+  for(let j=CASES.length-1;j>=0;j--){if(CASES[j].section===c.section){at=j;break;}}
+  if(at>=0) CASES.splice(at+1,0,c);
+  else{
+    // 비어 있던 진도로 옮기면, 저장된 진도 순서에 맞는 자리에 넣음 (새 진도면 맨 뒤)
+    const so=getOrderMeta().sectionOrder||[], pos=so.indexOf(c.section);
+    let ins=-1;
+    if(pos>=0) for(let j=0;j<CASES.length;j++){if(so.indexOf(CASES[j].section)>pos){ins=j;break;}}
+    if(ins<0) CASES.push(c); else CASES.splice(ins,0,c);
+  }
+  persistCaseOrder();
+  rebuildCases(true);
+  const p=pool(), idx=p.findIndex(x=>CASES[x]._k===k);   // 옮긴 판례를 계속 보여줌
+  if(idx>=0) caseIndex=idx;
 }
 function closeEdit(){$("editBg").classList.remove("open");}
 
@@ -1316,12 +1417,32 @@ async function saveEdit(){
   }
   const en=isAdded?EDITS[editCase._id]:null;
   if(isAdded&&!en){closeEdit();return;}   // 다른 기기에서 이미 삭제된 판례
-  let changed=0,metaChanged=false,newSection=null;
-  if(isAdded&&$("editTitle")){
-    const nt=$("editTitle").value.trim(), ns=$("editSection").value.trim();
+  let changed=0,metaChanged=false,newSection=null,sectionMoved=false,renamed=false;
+  const oldSection=editCase.section;
+  if($("editTitle")){
+    const nt=$("editTitle").value.trim();
+    let ns=editSectionValue(), curSection=oldSection;
+    const rn=editRenameValue();
     if(!nt||!ns) return err("판례 제목과 진도 이름을 비울 수 없습니다.");
-    if(nt!==en.title||ns!==en.section){
-      en.title=nt;en.question=nt;en.section=ns;PENDING[editCase._id]=en;
+    if(rn!==null&&!rn) return err("바꿀 진도 이름을 입력해 주세요.");
+    if(rn!==null&&rn!==oldSection){
+      renameSectionEverywhere(oldSection,rn);   // 이 진도의 모든 판례가 새 이름으로 유지됨
+      renamed=true;metaChanged=true;curSection=rn;newSection=rn;
+      if(ns===oldSection) ns=rn;
+    }
+    sectionMoved=ns!==curSection;
+    if(isAdded){
+      if(nt!==en.title||ns!==en.section){
+        en.title=nt;en.question=nt;en.section=ns;PENDING[editCase._id]=en;
+        metaChanged=true;newSection=ns;
+      }
+    }else if(nt!==caseTitle(editCase)||ns!==curSection){
+      const mk=caseMetaKey(editCase), dt=titleOf(editCase.question);
+      const e={kind:"casemeta",ref:dt,at:new Date().toISOString()};
+      if(nt!==dt) e.title=nt;
+      if(ns!==editCase._os) e.section=ns;
+      if(!e.title&&!e.section){delete EDITS[mk];PENDING[mk]=null;}   // 원래대로 돌아옴
+      else{EDITS[mk]=e;PENDING[mk]=e;}
       metaChanged=true;newSection=ns;
     }
   }
@@ -1341,11 +1462,15 @@ async function saveEdit(){
     }
   });
   if(!changed&&!metaChanged){closeEdit();return;}
-  if(isAdded){
+  if(isAdded||metaChanged){
     if(metaChanged&&filterSection) filterSection=newSection;   // 진도를 옮겨도 그 판례를 계속 보이게
+    const k=editCase._k;
     rebuildCases(true);
+    if(sectionMoved) moveCaseToSectionEnd(k);   // 옮긴 판례는 새 진도의 맨 뒤로
+    else if(renamed){persistCaseOrder();rebuildCases(true);}
   }else applyEdits();
   saveEditsLocal();render();
+  if(metaChanged) buildFilters();
   $("editSave").disabled=true;$("editCancel").disabled=true;
   st.textContent="GitHub에 저장하는 중…";st.className="status";
   const r=await syncPush();
